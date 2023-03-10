@@ -9,11 +9,12 @@ self.client.force_login(self.user)
 import json
 
 from django.contrib.auth.models import User
+from django.db.models import Count, Case, When, Avg
 from rest_framework.exceptions import ErrorDetail
 from rest_framework.test import APITestCase
 from rest_framework import status
 from django.urls import reverse
-from store.models import Book
+from store.models import Book, UserBookRelations
 from store.serializers import BookSerializers
 
 
@@ -26,21 +27,31 @@ class SubscriptionsApiTestCase(APITestCase):
                                           author_name='Author 1', owner=self.user)
         self.book_2 = Book.objects.create(name='Book One', price='1000',
                                           author_name='Author 2', owner=self.user2)
+        UserBookRelations.objects.create(user=self.user, book=self.book_1, like=True, rate=3)
+        UserBookRelations.objects.create(user=self.user2, book=self.book_2, like=True, rate=3)
 
 
     def test_get(self):
         url = reverse('book-list')
         response = self.client.get(url)
         self.assertEqual(status.HTTP_200_OK, response.status_code)
-        expended = BookSerializers([self.book_1, self.book_2], many=True).data
+        books = Book.objects.all().annotate(
+            annotated_likes=Count(Case(When(userbookrelations__like=True, then=1))))
+        expended = BookSerializers(books, many=True).data
         self.assertEqual(expended, response.data)
+        self.assertEqual(expended[0]['annotated_likes'], 1)
+        self.assertEqual(expended[0]['rating'], '3.00')
+
 
 
     def test_get_one_obj(self):
-        url = reverse('book-detail', args=(self.book_1.id,))
+        url = reverse('book-detail', args=(self.book_2.id,))
         response = self.client.get(url)
         self.assertEqual(status.HTTP_200_OK, response.status_code)
-        expended = BookSerializers(self.book_1).data
+        books = Book.objects.all().annotate(
+            annotated_likes=Count(Case(When(userbookrelations__like=True, then=1))))
+        book = books.get(id=self.book_2.id)
+        expended = BookSerializers(book).data
         self.assertEqual(expended, response.data)
 
     def test_create(self):
@@ -129,3 +140,59 @@ class SubscriptionsApiTestCase(APITestCase):
         self.assertEqual(status.HTTP_204_NO_CONTENT, response.status_code)
         self.assertEqual(0, Book.objects.filter(id=self.book_1.id).count())
 
+
+class UserBookRelationsTestCase(APITestCase):
+    def setUp(self):
+        self.user1 = User.objects.create(username='test_user1')
+        self.user2 = User.objects.create(username='test_user2')
+        # self.user_is_staff = User.objects.create(username='test_admin', is_staff=True)
+        self.book_1 = Book.objects.create(name='Book One', price='1000',
+                                          author_name='Author 1')
+        self.book_2 = Book.objects.create(name='Book One', price='1000',
+                                          author_name='Author 2')
+
+
+    def test_like_and_in_bookmakrs(self):
+        url = reverse('userbookrelations-detail', args=(self.book_1.id,))
+        self.client.force_login(self.user1)
+        data = {
+            'like': True
+        }
+        data_json = json.dumps(data)
+        response = self.client.patch(url, data=data_json, content_type="application/json")
+        self.assertEqual(status.HTTP_200_OK, response.status_code)
+        relations = UserBookRelations.objects.get(user=self.user1, book=self.book_1)
+        self.assertTrue(relations.like)
+        data = {
+            'in_bookmarks': True
+        }
+        data_json = json.dumps(data)
+        response = self.client.patch(url, data=data_json, content_type="application/json")
+        self.assertEqual(status.HTTP_200_OK, response.status_code)
+        relations = UserBookRelations.objects.get(user=self.user1, book=self.book_1)
+        self.assertTrue(relations.in_bookmarks)
+
+
+    def test_rate(self):
+        url = reverse('userbookrelations-detail', args=(self.book_2.id,))
+        self.client.force_login(self.user2)
+        data = {
+            'rate': 4,
+        }
+        data_json = json.dumps(data)
+        response = self.client.patch(url, data=data_json, content_type="application/json")
+        self.assertEqual(status.HTTP_200_OK, response.status_code, response.data)
+        relations = UserBookRelations.objects.get(user=self.user2, book=self.book_2)
+        self.assertEqual(4, relations.rate)
+
+
+    def test_rate_wrong(self):
+        url = reverse('userbookrelations-detail', args=(self.book_2.id,))
+        self.client.force_login(self.user2)
+        data = {
+            'rate': 9,
+        }
+        data_json = json.dumps(data)
+        response = self.client.patch(url, data=data_json, content_type="application/json")
+        self.assertEqual(status.HTTP_400_BAD_REQUEST, response.status_code, response.data)
+        self.assertEqual({'rate': [ErrorDetail(string='"9" is not a valid choice.', code='invalid_choice')]}, response.data)

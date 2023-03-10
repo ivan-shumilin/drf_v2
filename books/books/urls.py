@@ -16,17 +16,17 @@ Including another URLconf
 from django.contrib import admin
 from django.urls import path, include, re_path
 from rest_framework import routers
-from store.views import BookViewSet, auth
-
-
+from store.views import BookViewSet, auth, UserBookRelationsViewSet
 
 urlpatterns = [
     path('admin/', admin.site.urls),
     re_path('', include('social_django.urls', namespace='social')),
-    path('login/', auth, name='auth')
+    path('login/', auth, name='auth'),
+    path('__debug__/', include('debug_toolbar.urls')),
 ]
 
 router = routers.DefaultRouter()
 router.register(r'book', BookViewSet)
+router.register(r'book_relations', UserBookRelationsViewSet)
 
 urlpatterns += router.urls
